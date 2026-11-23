@@ -1,0 +1,20 @@
+# Segredos: nunca no git. O modelo (.env.example) vai.
+.env
+.env.*
+!.env.example
+
+# Binários e artefatos do Go
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+/servico-auditoria
+/bin/
+/dist/
+
+# Editores
+.vscode/
+.idea/

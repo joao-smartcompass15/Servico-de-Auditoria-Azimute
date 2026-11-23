@@ -1,0 +1,3 @@
+# Fim de linha LF no repositório e na cópia de trabalho: o serviço roda em
+# contêiner Linux, e o Windows não troca nada por CRLF.
+* text=auto eol=lf

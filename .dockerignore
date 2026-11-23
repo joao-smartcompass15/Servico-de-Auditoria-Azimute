@@ -1,0 +1,11 @@
+.git
+.vscode
+.idea
+*.md
+docker-compose.yml
+exemplos/
+*.exe
+*.test
+*.out
+.env
+.env.*
