@@ -19,9 +19,16 @@ gerenciador ─▶ Kafka ─────┤                                     
 ```
 
 - Os dois consumer groups leem o **mesmo tópico** de forma independente: o Kafka é a fonte única e Cassandra e Mongo não precisam se sincronizar.
-- O offset só é confirmado depois que a gravação dá certo. Se o banco cair, a mensagem é relida ao reiniciar.
-- As gravações usam o `id` da mensagem como chave, então reprocessar não duplica.
-- Ordem: **audita primeiro, distribui depois**. Nada é distribuído sem estar auditado.
+- O serviço tem **dois ramos independentes**:
+  - **gravação**: espera o Cassandra;
+  - **leitura**: espera o Mongo e atende a projeção e a API.
+
+  Com um banco fora, o outro ramo segue funcionando, e o ramo parado insiste na conexão sozinho.
+- **Leitores por grupo**: cada grupo tem `KAFKA_CONSUMIDORES` leitores, um por partição, que andam em paralelo. A ordem se mantém dentro de cada entidade, porque a mesma entidade cai sempre na mesma partição.
+- **Confirmação**: o offset só entra na fila de confirmação depois que a gravação dá certo, e a fila é enviada ao Kafka a cada 1 s. Se o serviço morrer, até 1 s de mensagens é relido.
+- **Banco lento ou fora**: o consumidor tenta a **mesma** mensagem de novo, com espera crescente de 0,2 s até 30 s. Não pula nada e não derruba o serviço.
+- **Sem duplicata**: as gravações usam o `id` da mensagem como chave, então reprocessar não duplica.
+- **Ordem entre auditar e distribuir**: primeiro audita, depois distribui. Nada é distribuído sem estar auditado.
 
 ### Alertas (inconformidades)
 
@@ -176,6 +183,38 @@ curl.exe -H $auth "http://localhost:8080/api/v1/auditoria?escopo=plataforma"
 go test ./...
 ```
 
+### Carga e queda (o "espancar")
+
+O `cmd/carga` despeja mensagens **fictícias** no tópico, com municípios novos a cada execução. Mistura:
+- ações com e sem motivo;
+- ações fora do catálogo;
+- 1% de mensagens sem `usuario_id`;
+- 0,5% de linhas que não são JSON.
+
+Em falha do Kafka, ele reenvia o lote. O resumo vai para `carga-ultima.json` (fora do git). Use só em ambiente local ou de homologação.
+
+```powershell
+go run ./cmd/carga -total 20000
+```
+
+Resultado em 23/11/2026, na máquina de desenvolvimento, que dividia CPU e memória com outros ambientes:
+
+| Cenário | Resultado |
+|---|---|
+| Publicação | 3.500 a 4.800 mensagens/s |
+| Consumo antes do ajuste (confirmação síncrona, 1 leitor) | ~100/s no Mongo e ~90/s no Cassandra |
+| Consumo depois (confirmação em lote, 3 leitores) | ~1.600/s no Mongo e ~420/s no Cassandra (carga de 20 mil, banco pequeno) |
+| **100 mil mensagens com queda no meio** | **98.484 de 98.484** no Mongo e no Cassandra: nada perdido, nada duplicado |
+| API durante as quedas | fora só nos 2 s do reinício proposital do serviço; com o Cassandra desligado, ela continuou respondendo |
+
+As quedas provocadas foram:
+1. `kill` no `kafka1`, que era broker e líder do quorum, no meio da publicação;
+2. Cassandra parado por 42 s;
+3. o serviço reiniciado com o Cassandra ainda fora;
+4. `kafka1` e Cassandra religados.
+
+A conferência no Cassandra é feita **por partição**. Um `count(*)` com `ALLOW FILTERING` varre a tabela inteira e estoura o tempo do servidor.
+
 ## Variáveis de ambiente
 
 | Variável | Padrão (local) |
@@ -185,6 +224,7 @@ go test ./...
 | `KAFKA_TOPICO` | `azimute.mensagens` |
 | `KAFKA_GRUPO` | `servico-auditoria` |
 | `KAFKA_GRUPO_PROJECAO` | `servico-auditoria-projecao` |
+| `KAFKA_CONSUMIDORES` | `3`: leitores por grupo, de 1 a 32. O ideal é igual ao número de partições do tópico; acima disso, os extras ficam parados |
 | `CASSANDRA_HOSTS` | `localhost` |
 | `CASSANDRA_KEYSPACE` | `auditoria` |
 | `CASSANDRA_USUARIO` / `CASSANDRA_SENHA` | vazio (sem autenticação) |
@@ -204,9 +244,10 @@ go test ./...
   - trocar o `AUDITORIA_TOKEN_SERVICO` de produção periodicamente (mudar nas duas pontas ao mesmo tempo).
 - **Tópico de erros (DLQ)**:
   - mensagens descartadas hoje vão só para o log;
-  - um erro *permanente* do banco (dado que o banco nunca aceita) faria o consumidor reiniciar em loop.
+  - um erro *permanente* do banco (dado que o banco nunca aceita) prende a partição: o consumidor tenta a mesma mensagem para sempre, com aviso no log.
 
   Os dois casos pedem um tópico de erros.
+- **Vazão do Mongo com volume**: na carga de 100 mil, com a coleção já em 160 mil documentos, a projeção caiu para ~350/s. A máquina de teste estava dividida com outros ambientes, então é preciso medir de novo num ambiente dedicado. Se a queda se confirmar, revisar os 5 índices compostos e o *write concern*.
 - **Cassandra em produção**: ajustar a replicação do keyspace (`NetworkTopologyStrategy`).
 - **Deploy**: o repositório segue Git Flow. Trabalho em `feature/*` saindo da `develop`; a `main` é produção e só recebe release. Merge na `main` = deploy no Dokploy, quando a aplicação for ligada a ela.
 - **Plataforma (gerenciador de processos)**: o lado que publica está na branch `feature/auditoria-por-servico` do backend, junto com a migration 094 (outbox). Lá, `AUDITORIA_KAFKA_BROKERS` aponta para o mesmo Kafka, e `AUDITORIA_URL` + `AUDITORIA_TOKEN_SERVICO` apontam para esta API pela rede interna.

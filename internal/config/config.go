@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 )
 
@@ -15,6 +16,10 @@ type Config struct {
 	KafkaTopico        string
 	KafkaGrupo         string // consumer group da gravação (Cassandra + distribuição)
 	KafkaGrupoProjecao string // consumer group da projeção de leitura (Mongo)
+	// KafkaConsumidores: quantos leitores por consumer group. O Kafka entrega
+	// cada partição a UM leitor do grupo, então o ideal é igual ao número de
+	// partições do tópico (3 no local). Mais que isso, os extras ficam parados.
+	KafkaConsumidores int
 
 	CassandraHosts    []string
 	CassandraKeyspace string
@@ -46,8 +51,15 @@ func (c Config) Validar() error {
 	if len(c.KafkaBrokers) == 0 {
 		return errors.New("KAFKA_BROKERS vazia")
 	}
+	if c.KafkaConsumidores < 1 || c.KafkaConsumidores > MaximoConsumidores {
+		return fmt.Errorf("KAFKA_CONSUMIDORES precisa ser um número de 1 a %d", MaximoConsumidores)
+	}
 	return nil
 }
+
+// MaximoConsumidores: teto de leitores por grupo (cada um é uma conexão a mais
+// com o Kafka e com os bancos).
+const MaximoConsumidores = 32
 
 // Carregar devolve a configuração, com valores padrão para rodar local.
 func Carregar() Config {
@@ -56,6 +68,7 @@ func Carregar() Config {
 		KafkaTopico:        ler("KAFKA_TOPICO", "azimute.mensagens"),
 		KafkaGrupo:         ler("KAFKA_GRUPO", "servico-auditoria"),
 		KafkaGrupoProjecao: ler("KAFKA_GRUPO_PROJECAO", "servico-auditoria-projecao"),
+		KafkaConsumidores:  inteiro(ler("KAFKA_CONSUMIDORES", "3")),
 
 		CassandraHosts:    lista(ler("CASSANDRA_HOSTS", "localhost")),
 		CassandraKeyspace: ler("CASSANDRA_KEYSPACE", "auditoria"),
@@ -79,6 +92,15 @@ func ler(chave, padrao string) string {
 		return v
 	}
 	return padrao
+}
+
+// inteiro converte o texto; o que não é número vira -1, e o Validar recusa.
+func inteiro(texto string) int {
+	n, err := strconv.Atoi(strings.TrimSpace(texto))
+	if err != nil {
+		return -1
+	}
+	return n
 }
 
 // lista transforma "a, b,c" em []string{"a", "b", "c"}.

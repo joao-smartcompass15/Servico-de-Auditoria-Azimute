@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"testing"
+	"time"
 
 	"github.com/segmentio/kafka-go"
 
@@ -59,5 +60,52 @@ func TestTratar(t *testing.T) {
 				t.Errorf("recebidas = %d, queria %d", len(proc.recebidas), c.querRecebidas)
 			}
 		})
+	}
+}
+
+// processadorInstavel falha as primeiras N vezes e depois funciona — o banco
+// que engasga sob carga e volta.
+type processadorInstavel struct {
+	falhasRestantes int
+	chamadas        int
+}
+
+func (p *processadorInstavel) Processar(_ context.Context, _ dominio.Mensagem) error {
+	p.chamadas++
+	if p.falhasRestantes > 0 {
+		p.falhasRestantes--
+		return errors.New("cassandra: Operation timed out")
+	}
+	return nil
+}
+
+func TestInsistir_RepeteAMesmaMensagemAteGravar(t *testing.T) {
+	proc := &processadorInstavel{falhasRestantes: 3}
+	consumidor := NovoConsumidorKafka(nil, proc, logMudo)
+	consumidor.esperaInicial = time.Millisecond // o teste não precisa esperar de verdade
+	consumidor.esperaMaxima = 4 * time.Millisecond
+
+	if !consumidor.insistir(t.Context(), kafka.Message{Value: []byte(jsonValido)}) {
+		t.Fatal("insistir devolveu false, mas o processador voltou a funcionar")
+	}
+	if proc.chamadas != 4 {
+		t.Errorf("chamadas = %d, queria 4 (3 falhas + o acerto)", proc.chamadas)
+	}
+}
+
+func TestInsistir_DesligamentoInterrompeSemConfirmar(t *testing.T) {
+	proc := &processadorInstavel{falhasRestantes: 1_000_000} // banco fora para sempre
+	consumidor := NovoConsumidorKafka(nil, proc, logMudo)
+	consumidor.esperaInicial = time.Millisecond
+	consumidor.esperaMaxima = time.Millisecond
+
+	ctx, cancelar := context.WithTimeout(t.Context(), 50*time.Millisecond)
+	defer cancelar()
+
+	if consumidor.insistir(ctx, kafka.Message{Value: []byte(jsonValido)}) {
+		t.Fatal("insistir devolveu true sem nunca ter gravado")
+	}
+	if proc.chamadas < 2 {
+		t.Errorf("chamadas = %d: deveria ter tentado de novo antes do desligamento", proc.chamadas)
 	}
 }

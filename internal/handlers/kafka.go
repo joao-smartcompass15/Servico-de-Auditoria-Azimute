@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"github.com/segmentio/kafka-go"
 
@@ -31,10 +32,19 @@ type ConsumidorKafka struct {
 	leitor      *kafka.Reader
 	processador Processador
 	log         *slog.Logger
+
+	// Espera entre as tentativas da MESMA mensagem quando o banco falha:
+	// começa curta e dobra a cada falha, até o teto.
+	esperaInicial time.Duration
+	esperaMaxima  time.Duration
 }
 
 func NovoConsumidorKafka(leitor *kafka.Reader, processador Processador, log *slog.Logger) *ConsumidorKafka {
-	return &ConsumidorKafka{leitor: leitor, processador: processador, log: log}
+	return &ConsumidorKafka{
+		leitor: leitor, processador: processador, log: log,
+		esperaInicial: 200 * time.Millisecond,
+		esperaMaxima:  30 * time.Second,
+	}
 }
 
 // Rodar lê mensagens até o contexto ser cancelado (Ctrl+C ou parada do container).
@@ -53,15 +63,8 @@ func (c *ConsumidorKafka) Rodar(ctx context.Context) error {
 			return fmt.Errorf("ler do kafka: %w", err)
 		}
 
-		if err := c.tratar(ctx, msg); err != nil {
-			if ctx.Err() != nil {
-				return nil // desligou no meio: sem commit, a mensagem volta ao reiniciar
-			}
-			// Falha de infraestrutura (ex.: banco fora do ar). Não confirmamos o
-			// offset e paramos. Ao reiniciar, a mensagem será lida de novo.
-			// Se pulássemos para a próxima e confirmássemos, esta seria perdida,
-			// porque o commit de um offset confirma também os anteriores.
-			return fmt.Errorf("partição %d, offset %d: %w", msg.Partition, msg.Offset, err)
+		if !c.insistir(ctx, msg) {
+			return nil // desligou no meio: sem commit, a mensagem volta ao reiniciar
 		}
 
 		if err := c.leitor.CommitMessages(ctx, msg); err != nil {
@@ -70,6 +73,47 @@ func (c *ConsumidorKafka) Rodar(ctx context.Context) error {
 			}
 			return fmt.Errorf("confirmar offset %d: %w", msg.Offset, err)
 		}
+	}
+}
+
+// insistir trata a mensagem até dar certo. Devolve false só se o serviço
+// estiver desligando (aí a mensagem fica sem commit e volta ao reiniciar).
+//
+// Falha de infraestrutura (banco lento ou fora do ar) NÃO derruba o serviço:
+// a MESMA mensagem é tentada de novo, com espera crescente. Pular para a
+// próxima não pode: o commit de um offset confirma também os anteriores, e esta
+// mensagem se perderia. Até 23/11/2026 o erro encerrava o processo inteiro
+// (API junto) para reiniciar e reler; na carga, um tempo esgotado de 1 s do
+// Cassandra virava 20 s de serviço fora do ar.
+//
+// Pendência conhecida: um erro PERMANENTE (dado que o banco nunca aceita)
+// prende a partição aqui, tentando para sempre, com aviso no log. Resolver isso
+// é o tópico de erros (DLQ).
+func (c *ConsumidorKafka) insistir(ctx context.Context, msg kafka.Message) bool {
+	espera := c.esperaInicial
+	for tentativa := 1; ; tentativa++ {
+		err := c.tratar(ctx, msg)
+		if err == nil {
+			if tentativa > 1 {
+				c.log.InfoContext(ctx, "mensagem gravada depois de falhas",
+					"particao", msg.Partition, "offset", msg.Offset, "tentativas", tentativa)
+			}
+			return true
+		}
+		if ctx.Err() != nil {
+			return false
+		}
+
+		c.log.WarnContext(ctx, "falha ao gravar; a mesma mensagem será tentada de novo",
+			"particao", msg.Partition, "offset", msg.Offset, "tentativa", tentativa,
+			"proxima_em", espera.String(), "erro", err)
+
+		select {
+		case <-ctx.Done():
+			return false
+		case <-time.After(espera):
+		}
+		espera = min(espera*2, c.esperaMaxima)
 	}
 }
 

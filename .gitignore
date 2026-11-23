@@ -15,6 +15,9 @@
 /bin/
 /dist/
 
+# Resumo da última carga de teste (cmd/carga)
+carga-ultima.json
+
 # Editores
 .vscode/
 .idea/

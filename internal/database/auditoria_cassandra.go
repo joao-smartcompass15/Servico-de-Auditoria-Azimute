@@ -68,8 +68,15 @@ INSERT INTO acoes_por_usuario
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 )
 
-// Gravar escreve o registro nas duas tabelas num LOGGED BATCH: o Cassandra
-// garante que, se uma gravação for aplicada, a outra também será.
+// Gravar escreve o registro nas duas tabelas, uma depois da outra.
+//
+// Por que NÃO um LOGGED BATCH (era assim até a carga de 23/11/2026): o batch
+// "logado" grava antes um registro de controle (batchlog) e depois o apaga —
+// o dobro de trabalho por mensagem, e foi o que estourou o tempo do Cassandra
+// sob carga. A garantia que ele dava ("as duas ou nenhuma") já vem de outro
+// lugar: se a segunda gravação falhar, o erro sobe, o offset NÃO é confirmado
+// e a mensagem inteira é gravada de novo. Como a chave das duas tabelas inclui
+// o id da mensagem, regravar só sobrescreve com o mesmo conteúdo.
 func (a *AuditoriaCassandra) Gravar(ctx context.Context, r dominio.Registro) error {
 	ocorrido := r.OcorridoEm.UTC()
 	dia := time.Date(ocorrido.Year(), ocorrido.Month(), ocorrido.Day(), 0, 0, 0, 0, time.UTC)
@@ -77,16 +84,18 @@ func (a *AuditoriaCassandra) Gravar(ctx context.Context, r dominio.Registro) err
 
 	// Os "?" são parâmetros: o driver envia os valores separados da query,
 	// o que impede injeção de CQL. Nunca monte a query concatenando strings.
-	lote := a.sessao.Batch(gocql.LoggedBatch).
-		Query(inserirHistorico,
-			r.Entidade, r.EntidadeID, ocorrido, r.ID, r.Acao, r.UsuarioID, r.TipoUsuario, r.MunicipioID,
-			r.Motivo, r.Origem, r.RequisicaoID, dados, r.Alertas, r.RecebidoEm).
-		Query(inserirPorUsuario,
-			r.UsuarioID, dia, ocorrido, r.ID, r.Acao, r.Entidade, r.EntidadeID, r.TipoUsuario, r.MunicipioID,
-			r.Motivo, r.Origem, r.RequisicaoID, dados, r.Alertas, r.RecebidoEm)
+	err := a.sessao.Query(inserirHistorico,
+		r.Entidade, r.EntidadeID, ocorrido, r.ID, r.Acao, r.UsuarioID, r.TipoUsuario, r.MunicipioID,
+		r.Motivo, r.Origem, r.RequisicaoID, dados, r.Alertas, r.RecebidoEm).ExecContext(ctx)
+	if err != nil {
+		return fmt.Errorf("cassandra: gravar linha do tempo: %w", err)
+	}
 
-	if err := lote.ExecContext(ctx); err != nil {
-		return fmt.Errorf("cassandra: gravar registro: %w", err)
+	err = a.sessao.Query(inserirPorUsuario,
+		r.UsuarioID, dia, ocorrido, r.ID, r.Acao, r.Entidade, r.EntidadeID, r.TipoUsuario, r.MunicipioID,
+		r.Motivo, r.Origem, r.RequisicaoID, dados, r.Alertas, r.RecebidoEm).ExecContext(ctx)
+	if err != nil {
+		return fmt.Errorf("cassandra: gravar ações do usuário: %w", err)
 	}
 	return nil
 }

@@ -1,14 +1,13 @@
 // Ponto de entrada do serviço de auditoria.
 //
-// O main só MONTA as peças (injeção de dependência feita à mão) e liga três
-// tarefas em paralelo:
+// O main só MONTA as peças (injeção de dependência feita à mão) e liga dois
+// ramos independentes, cada um esperando o próprio banco:
 //
-//  1. Gravação: lê o Kafka, audita TUDO no Cassandra e, se o catálogo de
+//  1. Gravação (Cassandra): lê o Kafka, audita TUDO e, se o catálogo de
 //     ações mandar, distribui aos usuários.
-//  2. Projeção: lê o MESMO tópico com outro consumer group e grava tudo no
-//     Mongo. Assim o Kafka é a fonte única e os dois bancos não precisam de
-//     sincronização entre si.
-//  3. API HTTP de consulta, que lê do Mongo. É interna: só a API do
+//  2. Leitura (Mongo): a projeção lê o MESMO tópico com outro consumer group
+//     e grava tudo no Mongo (o Kafka é a fonte única: os bancos não se
+//     sincronizam entre si); e a API HTTP de consulta, interna — só a API do
 //     gerenciador a chama, com o token de serviço e o município do usuário.
 package main
 
@@ -19,12 +18,16 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
+	gocql "github.com/apache/cassandra-gocql-driver/v2"
 	"github.com/segmentio/kafka-go"
+	"go.mongodb.org/mongo-driver/v2/mongo"
 
 	"api-auditoria/internal/config"
 	"api-auditoria/internal/database"
 	"api-auditoria/internal/distribuicao"
+	"api-auditoria/internal/dominio"
 	"api-auditoria/internal/handlers"
 	"api-auditoria/internal/service"
 )
@@ -57,53 +60,125 @@ func rodar(log *slog.Logger) error {
 	}
 	log.Info("catálogo de ações carregado", "arquivo", cfg.CatalogoAcoes, "acoes", len(catalogo))
 
-	// --- Conexões -----------------------------------------------------------
-	sessaoCassandra, err := database.ConectarCassandra(database.ConfigCassandra{
-		Hosts:    cfg.CassandraHosts,
-		Keyspace: cfg.CassandraKeyspace,
-		Usuario:  cfg.CassandraUsuario,
-		Senha:    cfg.CassandraSenha,
+	log.Info("serviço iniciado", "topico", cfg.KafkaTopico, "brokers", cfg.KafkaBrokers,
+		"leitores_por_grupo", cfg.KafkaConsumidores)
+
+	// DOIS RAMOS INDEPENDENTES, cada um esperando o PRÓPRIO banco. Até a carga
+	// de 23/11/2026 o serviço conectava nos dois bancos antes de tudo: com o
+	// Cassandra fora, ele não subia, e a API de consulta (que só usa o Mongo)
+	// caía junto, em loop de reinício. Agora:
+	//   - Cassandra fora: a gravação espera; a projeção e a API seguem no ar.
+	//   - Mongo fora: a projeção e a API esperam; a gravação da auditoria segue.
+	return rodarJuntas(ctx,
+		func(ctx context.Context) error { return ramoGravacao(ctx, cfg, catalogo, log) },
+		func(ctx context.Context) error { return ramoLeitura(ctx, cfg, catalogo, log) },
+	)
+}
+
+// ramoGravacao: conecta no Cassandra (insistindo) e roda os leitores do grupo
+// de gravação, que auditam e distribuem.
+func ramoGravacao(ctx context.Context, cfg config.Config, catalogo dominio.Catalogo, log *slog.Logger) error {
+	log = log.With("ramo", "gravacao")
+	sessao, err := comInsistencia(ctx, log, "cassandra", func(context.Context) (*gocql.Session, error) {
+		return database.ConectarCassandra(database.ConfigCassandra{
+			Hosts:    cfg.CassandraHosts,
+			Keyspace: cfg.CassandraKeyspace,
+			Usuario:  cfg.CassandraUsuario,
+			Senha:    cfg.CassandraSenha,
+		})
 	})
 	if err != nil {
-		return err
+		return nil // só sai daqui com erro se o serviço estiver desligando
 	}
-	defer sessaoCassandra.Close()
+	defer sessao.Close()
 
-	clienteMongo, err := database.ConectarMongo(ctx, cfg.MongoURI)
-	if err != nil {
-		return err
-	}
-	defer clienteMongo.Disconnect(context.Background())
-
-	acoesMongo, err := database.NovaAuditoriaMongo(ctx, clienteMongo.Database(cfg.MongoBanco))
-	if err != nil {
-		return err
-	}
-
-	// --- Montagem: adaptadores → services → handlers ------------------------
 	gravacao := service.NovoProcessador(
-		database.NovaAuditoriaCassandra(sessaoCassandra),
+		database.NovaAuditoriaCassandra(sessao),
 		distribuicao.NovoDistribuidorEmLog(log), // trocar pelo canal real de entrega
 		catalogo,
 	)
-	projecao := service.NovoProcessador(acoesMongo, distribuicao.Ignorar{}, catalogo)
+	return rodarJuntas(ctx, leitores(cfg, cfg.KafkaGrupo, gravacao, log)...)
+}
 
-	leitorGravacao := novoLeitor(cfg, cfg.KafkaGrupo)
-	defer leitorGravacao.Close()
-	leitorProjecao := novoLeitor(cfg, cfg.KafkaGrupoProjecao)
-	defer leitorProjecao.Close()
+// ramoLeitura: conecta no Mongo (insistindo) e roda os leitores do grupo de
+// projeção e a API de consulta.
+func ramoLeitura(ctx context.Context, cfg config.Config, catalogo dominio.Catalogo, log *slog.Logger) error {
+	log = log.With("ramo", "leitura")
+	type mongoPronto struct {
+		cliente *mongo.Client
+		acoes   *database.AuditoriaMongo
+	}
+	m, err := comInsistencia(ctx, log, "mongo", func(ctx context.Context) (mongoPronto, error) {
+		cliente, err := database.ConectarMongo(ctx, cfg.MongoURI)
+		if err != nil {
+			return mongoPronto{}, err
+		}
+		acoes, err := database.NovaAuditoriaMongo(ctx, cliente.Database(cfg.MongoBanco))
+		if err != nil {
+			_ = cliente.Disconnect(context.Background())
+			return mongoPronto{}, err
+		}
+		return mongoPronto{cliente, acoes}, nil
+	})
+	if err != nil {
+		return nil
+	}
+	defer m.cliente.Disconnect(context.Background())
 
-	consumidorGravacao := handlers.NovoConsumidorKafka(leitorGravacao, gravacao, log.With("tarefa", "gravacao"))
-	consumidorProjecao := handlers.NovoConsumidorKafka(leitorProjecao, projecao, log.With("tarefa", "projecao"))
-	api := handlers.NovaAPI(service.NovaConsulta(acoesMongo), cfg.TokenServico, log)
+	projecao := service.NovoProcessador(m.acoes, distribuicao.Ignorar{}, catalogo)
+	api := handlers.NovaAPI(service.NovaConsulta(m.acoes), cfg.TokenServico, log)
 
-	log.Info("serviço iniciado", "topico", cfg.KafkaTopico, "brokers", cfg.KafkaBrokers)
+	tarefas := leitores(cfg, cfg.KafkaGrupoProjecao, projecao, log)
+	tarefas = append(tarefas, func(ctx context.Context) error {
+		return handlers.RodarServidor(ctx, cfg.HTTPEndereco, api, log)
+	})
+	return rodarJuntas(ctx, tarefas...)
+}
 
-	return rodarJuntas(ctx,
-		consumidorGravacao.Rodar,
-		consumidorProjecao.Rodar,
-		func(ctx context.Context) error { return handlers.RodarServidor(ctx, cfg.HTTPEndereco, api, log) },
-	)
+// leitores monta N leitores do mesmo grupo, cada um numa tarefa. O Kafka dá
+// cada partição a UM leitor do grupo: as partições andam em paralelo, e dentro
+// de cada uma a ordem se mantém (a mesma entidade cai sempre na mesma
+// partição, pela chave). O processador é compartilhado: as sessões do
+// Cassandra e do Mongo são seguras para uso concorrente, e o catálogo só é lido.
+func leitores(cfg config.Config, grupo string, processador handlers.Processador, log *slog.Logger) []func(context.Context) error {
+	tarefas := make([]func(context.Context) error, cfg.KafkaConsumidores)
+	for i := range tarefas {
+		tarefas[i] = func(ctx context.Context) error {
+			leitor := novoLeitor(cfg, grupo)
+			defer leitor.Close() // fechar também envia os offsets que estão na fila
+			return handlers.NovoConsumidorKafka(leitor, processador, log.With("leitor", i)).Rodar(ctx)
+		}
+	}
+	return tarefas
+}
+
+// comInsistencia tenta conectar até conseguir, com espera crescente (1 s, 2 s,
+// 4 s... até 30 s). Só desiste se o serviço estiver desligando.
+//
+// [T any] é um parâmetro de TIPO (generics, Go 1.18+): a mesma função serve
+// para a sessão do Cassandra e para o cliente do Mongo, e o compilador sabe o
+// tipo exato do que volta, sem conversão.
+func comInsistencia[T any](ctx context.Context, log *slog.Logger, banco string, conectar func(context.Context) (T, error)) (T, error) {
+	espera := time.Second
+	for tentativa := 1; ; tentativa++ {
+		valor, err := conectar(ctx)
+		if err == nil {
+			log.Info("conectado", "banco", banco, "tentativas", tentativa)
+			return valor, nil
+		}
+		var zero T // o "valor vazio" do tipo T, para devolver junto com o erro
+		if ctx.Err() != nil {
+			return zero, ctx.Err()
+		}
+		log.Warn("banco indisponível; tentando de novo", "banco", banco,
+			"tentativa", tentativa, "proxima_em", espera.String(), "erro", err)
+		select {
+		case <-ctx.Done():
+			return zero, ctx.Err()
+		case <-time.After(espera):
+		}
+		espera = min(espera*2, 30*time.Second)
+	}
 }
 
 func novoLeitor(cfg config.Config, grupo string) *kafka.Reader {
@@ -112,6 +187,13 @@ func novoLeitor(cfg config.Config, grupo string) *kafka.Reader {
 		Topic:       cfg.KafkaTopico,
 		GroupID:     grupo,
 		StartOffset: kafka.FirstOffset, // grupo novo começa do início do tópico
+
+		// Confirma os offsets em LOTE, uma vez por segundo, em vez de uma ida e
+		// volta ao Kafka por mensagem (era o gargalo: ~100 mensagens/s).
+		// Continua "pelo menos uma vez": só entra na fila de confirmação o que já
+		// foi gravado. Se o serviço morrer antes do envio, até 1 s de mensagens é
+		// relido ao voltar, e a gravação pelo id não duplica nada.
+		CommitInterval: time.Second,
 	})
 }
 
