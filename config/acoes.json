@@ -1,0 +1,137 @@
+{
+  "carteira.recalculada":                    { "distribuir": false, "motivo_obrigatorio": false },
+
+  "cda.criada":                              { "distribuir": false, "motivo_obrigatorio": true },
+  "cda.editada":                             { "distribuir": false, "motivo_obrigatorio": true },
+  "cda.item_incluido":                       { "distribuir": false, "motivo_obrigatorio": true },
+  "cda.item_alterado":                       { "distribuir": false, "motivo_obrigatorio": true },
+  "cda.item_encerrado":                      { "distribuir": false, "motivo_obrigatorio": true },
+  "cda.parcelamento_incluido":               { "distribuir": false, "motivo_obrigatorio": true },
+  "cda.parcelamento_alterado":               { "distribuir": false, "motivo_obrigatorio": true },
+  "cda.parcelamento_encerrado":              { "distribuir": false, "motivo_obrigatorio": true },
+  "cda.pagamento_incluido":                  { "distribuir": false, "motivo_obrigatorio": true },
+  "cda.pagamento_alterado":                  { "distribuir": false, "motivo_obrigatorio": true },
+  "cda.pagamento_encerrado":                 { "distribuir": false, "motivo_obrigatorio": true },
+  "cda.processo_vinculado":                  { "distribuir": false, "motivo_obrigatorio": true },
+  "cda.vinculo_encerrado":                   { "distribuir": false, "motivo_obrigatorio": true },
+
+  "cluster.faixas_salvas":                   { "distribuir": false, "motivo_obrigatorio": false },
+
+  "devedor.interacao_registrada":            { "distribuir": false, "motivo_obrigatorio": false },
+  "devedor.suspensao_aberta":                { "distribuir": false, "motivo_obrigatorio": true },
+  "devedor.suspensao_encerrada":             { "distribuir": false, "motivo_obrigatorio": true },
+
+  "documento.versao_enviada":                { "distribuir": false, "motivo_obrigatorio": false },
+  "documento.publicado":                     { "distribuir": false, "motivo_obrigatorio": false },
+  "documento.minuta_aprovada":               { "distribuir": false, "motivo_obrigatorio": false },
+  "documento.minuta_devolvida":              { "distribuir": false, "motivo_obrigatorio": true },
+
+  "execucao.assumida":                       { "distribuir": false, "motivo_obrigatorio": false },
+  "execucao.consulta_registrada":            { "distribuir": false, "motivo_obrigatorio": false },
+  "execucao.consulta_estornada":             { "distribuir": false, "motivo_obrigatorio": true },
+  "execucao.devolvida":                      { "distribuir": false, "motivo_obrigatorio": true },
+  "execucao.concluida":                      { "distribuir": false, "motivo_obrigatorio": false },
+
+  "faixa_niv.definida":                      { "distribuir": false, "motivo_obrigatorio": true },
+
+  "investidor.criado":                       { "distribuir": false, "motivo_obrigatorio": false },
+  "investidor.editado":                      { "distribuir": false, "motivo_obrigatorio": false },
+  "investidor.municipios_definidos":         { "distribuir": false, "motivo_obrigatorio": false },
+  "investidor.usuario_convidado":            { "distribuir": false, "motivo_obrigatorio": false },
+
+  "lote.criado":                             { "distribuir": false, "motivo_obrigatorio": false },
+  "lote.editado":                            { "distribuir": false, "motivo_obrigatorio": false },
+  "lote.importado":                          { "distribuir": false, "motivo_obrigatorio": false },
+  "lote.reclassificado":                     { "distribuir": false, "motivo_obrigatorio": false },
+
+  "marca.salva":                             { "distribuir": false, "motivo_obrigatorio": false },
+  "marca.removida":                          { "distribuir": false, "motivo_obrigatorio": false },
+  "marca.logo_enviado":                      { "distribuir": false, "motivo_obrigatorio": false },
+  "marca.logo_removido":                     { "distribuir": false, "motivo_obrigatorio": false },
+
+  "oferta.programa_criado":                  { "distribuir": false, "motivo_obrigatorio": true },
+  "oferta.programa_alterado":                { "distribuir": false, "motivo_obrigatorio": true },
+
+  "papel.criado":                            { "distribuir": false, "motivo_obrigatorio": false },
+  "papel.editado":                           { "distribuir": false, "motivo_obrigatorio": false },
+  "papel.permissao_concedida":               { "distribuir": false, "motivo_obrigatorio": false },
+  "papel.permissao_revogada":                { "distribuir": false, "motivo_obrigatorio": false },
+
+  "papel_escritorio.criado":                 { "distribuir": false, "motivo_obrigatorio": true },
+  "papel_escritorio.editado":                { "distribuir": false, "motivo_obrigatorio": true },
+
+  "parametro.criado":                        { "distribuir": false, "motivo_obrigatorio": false },
+  "parametro.editado":                       { "distribuir": false, "motivo_obrigatorio": false },
+  "parametro.catalogo_editado":              { "distribuir": false, "motivo_obrigatorio": false },
+  "parametro.revertido":                     { "distribuir": false, "motivo_obrigatorio": false },
+  "parametro.dominio_criado":                { "distribuir": false, "motivo_obrigatorio": false },
+  "parametro.dominio_editado":               { "distribuir": false, "motivo_obrigatorio": false },
+  "parametro.global_editado":                { "distribuir": false, "motivo_obrigatorio": false },
+  "parametro.catalogo_global_editado":       { "distribuir": false, "motivo_obrigatorio": false },
+  "parametro.global_revertido":              { "distribuir": false, "motivo_obrigatorio": false },
+
+  "prefeitura.criada":                       { "distribuir": false, "motivo_obrigatorio": false },
+  "prefeitura.editada":                      { "distribuir": false, "motivo_obrigatorio": false },
+  "prefeitura.responsavel_concedido":        { "distribuir": false, "motivo_obrigatorio": false },
+  "prefeitura.responsavel_revogado":         { "distribuir": false, "motivo_obrigatorio": false },
+
+  "prestador.criado":                        { "distribuir": false, "motivo_obrigatorio": false },
+  "prestador.prefeitura_vinculada":          { "distribuir": false, "motivo_obrigatorio": false },
+  "prestador.prefeitura_desvinculada":       { "distribuir": false, "motivo_obrigatorio": false },
+
+  "processo.criado":                         { "distribuir": false, "motivo_obrigatorio": false },
+  "processo.ficha_editada":                  { "distribuir": false, "motivo_obrigatorio": true },
+  "processo.evento_registrado":              { "distribuir": false, "motivo_obrigatorio": true },
+  "processo.acao_registrada":                { "distribuir": false, "motivo_obrigatorio": true },
+  "processo.documento_enviado":              { "distribuir": false, "motivo_obrigatorio": false },
+  "processo.parte_incluida":                 { "distribuir": false, "motivo_obrigatorio": true },
+  "processo.parte_alterada":                 { "distribuir": false, "motivo_obrigatorio": true },
+  "processo.parte_encerrada":                { "distribuir": false, "motivo_obrigatorio": true },
+  "processo.endereco_incluido":              { "distribuir": false, "motivo_obrigatorio": true },
+  "processo.endereco_alterado":              { "distribuir": false, "motivo_obrigatorio": true },
+  "processo.endereco_encerrado":             { "distribuir": false, "motivo_obrigatorio": true },
+  "processo.telefone_incluido":              { "distribuir": false, "motivo_obrigatorio": true },
+  "processo.telefone_alterado":              { "distribuir": false, "motivo_obrigatorio": true },
+  "processo.telefone_encerrado":             { "distribuir": false, "motivo_obrigatorio": true },
+
+  "regra_aprovacao.criada":                  { "distribuir": false, "motivo_obrigatorio": false },
+  "regra_aprovacao.revogada":                { "distribuir": false, "motivo_obrigatorio": false },
+
+  "sessao.municipio_trocado":                { "distribuir": false, "motivo_obrigatorio": false },
+
+  "solicitacao.criada":                      { "distribuir": true,  "motivo_obrigatorio": false },
+  "solicitacao.respondida":                  { "distribuir": false, "motivo_obrigatorio": false },
+  "solicitacao.anexo_enviado":               { "distribuir": false, "motivo_obrigatorio": false },
+  "solicitacao.encaminhada":                 { "distribuir": false, "motivo_obrigatorio": false },
+  "solicitacao.aceita":                      { "distribuir": false, "motivo_obrigatorio": false },
+  "solicitacao.declinada":                   { "distribuir": false, "motivo_obrigatorio": false },
+  "solicitacao.aprovada":                    { "distribuir": true,  "motivo_obrigatorio": false },
+  "solicitacao.aprovacao_desfeita":          { "distribuir": false, "motivo_obrigatorio": false },
+  "solicitacao.reprovada":                   { "distribuir": true,  "motivo_obrigatorio": true },
+  "solicitacao.reiniciada":                  { "distribuir": false, "motivo_obrigatorio": false },
+  "solicitacao.status_alterado":             { "distribuir": false, "motivo_obrigatorio": false },
+  "solicitacao.valores_ajustados":           { "distribuir": false, "motivo_obrigatorio": true },
+  "solicitacao.encerrada":                   { "distribuir": true,  "motivo_obrigatorio": false },
+  "solicitacao.reaberta":                    { "distribuir": false, "motivo_obrigatorio": false },
+
+  "status_processo.criado":                  { "distribuir": false, "motivo_obrigatorio": false },
+  "status_processo.editado":                 { "distribuir": false, "motivo_obrigatorio": false },
+  "status_processo.personalizado":           { "distribuir": false, "motivo_obrigatorio": false },
+  "status_processo.personalizacao_desfeita": { "distribuir": false, "motivo_obrigatorio": false },
+
+  "usuario.criado":                          { "distribuir": false, "motivo_obrigatorio": false },
+  "usuario.editado":                         { "distribuir": false, "motivo_obrigatorio": false },
+  "usuario.excluido":                        { "distribuir": false, "motivo_obrigatorio": false },
+  "usuario.convite_reenviado":               { "distribuir": false, "motivo_obrigatorio": false },
+
+  "usuario_plataforma.criado":               { "distribuir": false, "motivo_obrigatorio": false },
+  "usuario_plataforma.editado":              { "distribuir": false, "motivo_obrigatorio": false },
+  "usuario_plataforma.excluido":             { "distribuir": false, "motivo_obrigatorio": false },
+  "usuario_plataforma.convite_reenviado":    { "distribuir": false, "motivo_obrigatorio": false },
+
+  "usuario_prestador.criado":                { "distribuir": false, "motivo_obrigatorio": false },
+  "usuario_prestador.editado":               { "distribuir": false, "motivo_obrigatorio": false },
+  "usuario_prestador.excluido":              { "distribuir": false, "motivo_obrigatorio": false },
+  "usuario_prestador.convite_reenviado":     { "distribuir": false, "motivo_obrigatorio": false },
+  "usuario_prestador.papeis_definidos":      { "distribuir": false, "motivo_obrigatorio": true }
+}

@@ -1,0 +1,157 @@
+# Ambiente LOCAL de desenvolvimento. Não usar em produção.
+# Portas presas em 127.0.0.1 para não ficarem abertas na rede.
+#
+# Em PRODUÇÃO o Kafka NÃO sobe daqui: o serviço consome o Kafka que já roda no
+# Dokploy (KAFKA_BROKERS aponta para ele). kafka1/kafka2/kafka-controle abaixo
+# existem só para testar na máquina.
+#
+# Tudo junto:              docker compose up -d --build
+# Só a infra (e o serviço com "go run ./cmd" na máquina):
+#                          docker compose up -d kafka-init cassandra-init mongo
+#
+# Kafka: UM cluster com dois brokers (kafka1 e kafka2) + um nó só de controle
+# (kafka-controle). Cada mensagem fica copiada nos dois brokers; se um cair, o
+# outro assume sozinho. O nó de controle existe porque o Kafka (modo KRaft) só
+# funciona com a MAIORIA dos votantes de pé: com 3 votantes, aguenta perder 1;
+# com só 2, perder 1 pararia o cluster inteiro.
+
+# Configuração comum aos nós do Kafka. "&kafka-comum" cria uma âncora YAML,
+# reaproveitada abaixo com "<<: *kafka-comum" (evita repetir tudo três vezes).
+x-kafka-comum: &kafka-comum
+  CLUSTER_ID: 4L6g3nShT-eMCtK--X86sw # todos os nós do mesmo cluster usam o mesmo ID
+  KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka1:9093,2@kafka2:9093,3@kafka-controle:9093
+  KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+  KAFKA_INTER_BROKER_LISTENER_NAME: INTERNO
+  KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: INTERNO:PLAINTEXT,EXTERNO:PLAINTEXT,CONTROLLER:PLAINTEXT
+  KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+  KAFKA_HEAP_OPTS: -Xmx512M -Xms512M # reduzido para caber numa máquina de desenvolvimento
+  # Replicação: todo dado existe nos DOIS brokers, inclusive a posição de
+  # leitura de cada consumidor (__consumer_offsets).
+  KAFKA_DEFAULT_REPLICATION_FACTOR: 2
+  KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 2
+  KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 2
+  KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+  # Aceita escrita com só 1 broker de pé. Com 2, o backup não serviria:
+  # a queda de um broker bloquearia as gravações.
+  KAFKA_MIN_INSYNC_REPLICAS: 1
+
+services:
+  kafka1:
+    image: apache/kafka:4.0.0
+    depends_on: [kafka-controle]
+    ports:
+      - "127.0.0.1:9092:9092"
+    environment:
+      <<: *kafka-comum
+      # Dois "endereços": INTERNO para os containers (kafka1:19092) e
+      # EXTERNO para quem roda na máquina (localhost:9092).
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: INTERNO://:19092,EXTERNO://:9092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: INTERNO://kafka1:19092,EXTERNO://localhost:9092
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka1:19092 --list >/dev/null 2>&1"]
+      interval: 5s
+      timeout: 10s
+      retries: 30
+
+  kafka2:
+    image: apache/kafka:4.0.0
+    depends_on: [kafka-controle]
+    ports:
+      - "127.0.0.1:9094:9094"
+    environment:
+      <<: *kafka-comum
+      KAFKA_NODE_ID: 2
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: INTERNO://:19092,EXTERNO://:9094,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: INTERNO://kafka2:19092,EXTERNO://localhost:9094
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka2:19092 --list >/dev/null 2>&1"]
+      interval: 5s
+      timeout: 10s
+      retries: 30
+
+  # Só vota na coordenação do cluster; não guarda mensagens. Pode ser pequeno.
+  kafka-controle:
+    image: apache/kafka:4.0.0
+    environment:
+      <<: *kafka-comum
+      KAFKA_NODE_ID: 3
+      KAFKA_PROCESS_ROLES: controller
+      KAFKA_LISTENERS: CONTROLLER://:9093
+      KAFKA_HEAP_OPTS: -Xmx256M -Xms256M
+
+  # Roda uma vez: cria o tópico (com réplica nos dois brokers) e sai.
+  kafka-init:
+    image: apache/kafka:4.0.0
+    depends_on:
+      kafka1:
+        condition: service_healthy
+      kafka2:
+        condition: service_healthy
+    entrypoint: ["/opt/kafka/bin/kafka-topics.sh"]
+    command: ["--bootstrap-server", "kafka1:19092,kafka2:19092", "--create", "--if-not-exists",
+              "--topic", "azimute.mensagens", "--partitions", "3", "--replication-factor", "2"]
+
+  cassandra:
+    image: cassandra:5.0
+    ports:
+      - "127.0.0.1:9042:9042"
+    environment:
+      MAX_HEAP_SIZE: 512M # reduzido para caber numa máquina de desenvolvimento
+      HEAP_NEWSIZE: 128M
+    volumes:
+      - cassandra-dados:/var/lib/cassandra
+    healthcheck:
+      test: ["CMD-SHELL", "cqlsh -e 'describe keyspaces' >/dev/null 2>&1"]
+      interval: 10s
+      timeout: 10s
+      retries: 30
+      start_period: 30s
+
+  # Roda uma vez: aplica o schema e sai.
+  cassandra-init:
+    image: cassandra:5.0
+    depends_on:
+      cassandra:
+        condition: service_healthy
+    volumes:
+      - ./schema/cassandra.cql:/schema/cassandra.cql:ro
+    entrypoint: ["cqlsh", "cassandra", "-f", "/schema/cassandra.cql"]
+
+  mongo:
+    image: mongo:8.0
+    ports:
+      - "127.0.0.1:27017:27017"
+    volumes:
+      - mongo-dados:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping')"]
+      interval: 5s
+      timeout: 10s
+      retries: 30
+
+  servico-auditoria:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      kafka-init:
+        condition: service_completed_successfully
+      cassandra-init:
+        condition: service_completed_successfully
+      mongo:
+        condition: service_healthy
+    environment:
+      KAFKA_BROKERS: kafka1:19092,kafka2:19092 # os dois: se um cair, o cliente usa o outro
+      CASSANDRA_HOSTS: cassandra
+      MONGO_URI: mongodb://mongo:27017
+      # Segredo que a API do gerenciador apresenta para consultar. Vem do .env
+      # (fora do git); sem ele o compose nem sobe. Modelo em .env.example.
+      AUDITORIA_TOKEN_SERVICO: ${AUDITORIA_TOKEN_SERVICO:?defina AUDITORIA_TOKEN_SERVICO no .env (veja .env.example)}
+    ports:
+      - "127.0.0.1:8080:8080"
+
+volumes:
+  cassandra-dados:
+  mongo-dados:
